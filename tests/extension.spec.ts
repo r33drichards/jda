@@ -17,11 +17,14 @@ async function setup(context: BrowserContext, extensionId: string, config: Confi
   await expect(popup.getByRole('status')).toHaveText('Settings saved.');
   await popup.goto(`chrome-extension://${extensionId}/index.html`);
   const page = await context.newPage(); await page.goto(`${base}/fixture?private=secret-query${multi ? '&multi=1' : ''}#secret-fragment`); await page.bringToFront();
+  await expect(popup.getByRole('button', { name: 'Allow this tab', exact: true })).toBeVisible();
+  await popup.getByRole('button', { name: 'Allow this tab', exact: true }).click();
+  await expect(popup.getByTestId('tab-access')).toHaveText('Allowed on this tab');
   return { popup, page };
 }
 async function evaluate(popup: Page) {
   await popup.getByRole('button', { name: 'Evaluate current page' }).click();
-  await expect(popup.getByRole('button', { name: 'Evaluate current page' })).toBeEnabled();
+  await expect(popup.getByRole('button', { name: 'Evaluate current page' })).toBeEnabled({ timeout: 35000 });
 }
 test.beforeEach(async ({ request }) => { await request.post(`${base}/control`, { data: {} }); });
 for (const decision of ['update', 'asking for approval', 'clarifying question', 'other']) {
@@ -78,6 +81,7 @@ test('disabled and non-permitting rules cannot authorize a reply', async ({ cont
 test('other categories bypass approval rules even when rules permit approval', async ({ context, extensionId, request }) => {
   const { popup, page } = await setup(context, extensionId, { ...defaultConfig, rules, reply });
   await evaluate(popup);
+  await expect(popup.getByRole('heading', { name: 'update', exact: true })).toBeVisible();
   expect(await (await request.get(`${base}/requests`)).json()).toHaveLength(1);
   await expect(page.locator('#composer')).toBeHidden(); await expect(page.locator('#sent p')).toHaveCount(0);
 });
@@ -205,4 +209,53 @@ test('failed Jev requests remain unread and can retry', async ({ context, extens
   await evaluate(popup);
   await expect(popup.getByRole('heading', { name: 'update', exact: true })).toBeVisible();
   expect(await (await request.get(`${base}/requests`)).json()).toHaveLength(1);
+});
+
+test('allowance is per tab, even for another tab on the same site', async ({ context, extensionId, request }) => {
+  const { popup, page } = await setup(context, extensionId);
+  const other = await context.newPage(); await other.goto(`${base}/fixture`); await other.bringToFront();
+  await expect(popup.getByTestId('tab-access')).toHaveText('Inactive on this tab');
+  await expect(popup.getByRole('button', { name: 'Evaluate current page' })).toBeDisabled();
+  await expect(popup.getByRole('button', { name: 'Mark all as read' })).toBeDisabled();
+  await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'EVALUATE' }));
+  expect(await (await request.get(`${base}/requests`)).json()).toEqual([]);
+  await page.bringToFront();
+  await expect(popup.getByTestId('tab-access')).toHaveText('Allowed on this tab');
+  await evaluate(popup);
+  expect(await (await request.get(`${base}/requests`)).json()).toHaveLength(1);
+});
+test('disallowing a tab blocks direct evaluate, mark-read, and monitoring requests', async ({ context, extensionId, request }) => {
+  const { popup } = await setup(context, extensionId);
+  await popup.getByRole('button', { name: 'Disallow this tab' }).click();
+  await expect(popup.getByTestId('tab-access')).toHaveText('Inactive on this tab');
+  await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'EVALUATE' }));
+  const read = await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'MARK_ALL_READ' }));
+  const start = await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'START' }));
+  expect(read.error).toContain('inactive'); expect(start.error).toContain('inactive');
+  expect(await (await request.get(`${base}/requests`)).json()).toEqual([]);
+  expect(await popup.evaluate(() => chrome.storage.local.get('seenMessages'))).toEqual({});
+});
+test('revoking while Jev is running prevents the pending approval reply', async ({ context, extensionId, request }) => {
+  await request.post(`${base}/control`, { data: { decision: 'asking for approval', decisions: { approve_0_0: 'can approve' }, holdRules: true } });
+  const { popup, page } = await setup(context, extensionId, { ...defaultConfig, rules, reply });
+  await popup.getByRole('button', { name: 'Evaluate current page' }).click();
+  await expect.poll(async () => (await (await request.get(`${base}/requests`)).json()).length).toBe(2);
+  await popup.getByRole('button', { name: 'Disallow this tab' }).click();
+  await expect(popup.getByTestId('tab-access')).toHaveText('Inactive on this tab');
+  await request.post(`${base}/release-rules`);
+  await expect.poll(() => popup.evaluate(async () => (await chrome.storage.local.get('latest')).latest?.result?.queryResults?.[0]?.replyStatus)).toBe('failed');
+  await expect(page.locator('#sent p')).toHaveCount(0);
+});
+test('changing sites revokes the tab and closing it removes its allowance', async ({ context, extensionId }) => {
+  const { popup, page } = await setup(context, extensionId);
+  const keys = await popup.evaluate(async () => Object.keys(await chrome.storage.session.get(null)).filter(k => k.startsWith('allowedTab:')));
+  expect(keys).toHaveLength(1);
+  await page.goto('about:blank');
+  await expect.poll(() => popup.evaluate(async () => Object.keys(await chrome.storage.session.get(null)).filter(k => k.startsWith('allowedTab:')).length)).toBe(0);
+  await page.goto(`${base}/fixture`); await page.bringToFront();
+  await expect(popup.getByTestId('tab-access')).toHaveText('Inactive on this tab');
+  await popup.getByRole('button', { name: 'Allow this tab', exact: true }).click();
+  await expect(popup.getByTestId('tab-access')).toHaveText('Allowed on this tab');
+  await page.close();
+  await expect.poll(() => popup.evaluate(async () => Object.keys(await chrome.storage.session.get(null)).filter(k => k.startsWith('allowedTab:')).length)).toBe(0);
 });

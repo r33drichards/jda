@@ -4,6 +4,7 @@ import { captureSnapshot } from './snapshot';
 import { replyApprove } from './reply';
 import { identifyMessages, unreadBatch } from './seen';
 import type { SeenMessages } from './seen';
+import { allowCurrentTab, currentTab, requireAllowed, revokeTab, tabAllowance } from './tabs';
 
 const ALARM = 'jda-evaluate';
 let inFlight = false;
@@ -14,9 +15,9 @@ async function evaluate() {
   let claimedKeys: string[] = [];
   let classificationsSaved = false;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab?.id) throw new Error('Open a web page before evaluating.');
-    const [capture] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: captureSnapshot });
+    const tab = await currentTab();
+    const allowance = await requireAllowed(tab.id!);
+    const [capture] = await chrome.scripting.executeScript({ target: { tabId: tab.id! }, func: captureSnapshot });
     const snapshot = capture.result;
     const config = await loadConfig();
     if (!snapshot) throw new Error('Could not read this page.');
@@ -32,6 +33,7 @@ async function evaluate() {
     // Reserve the batch before Jev so a worker restart cannot process it twice.
     await chrome.storage.local.set({ seenMessages });
     snapshot.messages = pending.map(item => item.message);
+    await requireAllowed(tab.id!, allowance.token);
     const response = await fetch('http://127.0.0.1:8787/decide', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config, snapshot }),
@@ -53,14 +55,15 @@ async function evaluate() {
         continue;
       }
       try {
+        await requireAllowed(tab.id!, allowance.token);
         if (!item.id) throw new Error('Automatic replies require a stable data-message-id.');
         if (!config.reply.editorSelector || !config.reply.sendSelector) throw new Error('Configure reply editor and Send selectors in Settings.');
         // Persist before the click so a worker restart cannot send the same approval twice.
         approvalReceipts[key] = { state: 'sending', at: new Date().toISOString() };
         await chrome.storage.local.set({ approvalReceipts });
         const [reply] = await chrome.scripting.executeScript({
-          target: { tabId: tab.id, documentIds: [capture.documentId!] },
-          func: replyApprove, args: [{ index: item.index, id: item.id, text: item.text }, config.reply],
+          target: { tabId: tab.id!, documentIds: [capture.documentId!] },
+          func: replyApprove, args: [{ index: item.index, id: item.id, text: item.text }, config.reply, allowance.token],
         });
         if (reply.result !== 'sent') throw new Error('Reply execution did not finish.');
         item.replyStatus = 'sent'; approvalReceipts[key].state = 'sent';
@@ -87,9 +90,9 @@ async function markAllRead() {
   if (inFlight) throw new Error('Wait for the current evaluation to finish.');
   inFlight = true;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab?.id) throw new Error('Open a web page first.');
-    const [{ result: snapshot }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: captureSnapshot });
+    const tab = await currentTab();
+    await requireAllowed(tab.id!);
+    const [{ result: snapshot }] = await chrome.scripting.executeScript({ target: { tabId: tab.id! }, func: captureSnapshot });
     if (!snapshot) throw new Error('Could not read this page.');
     const { seenMessages = {} }: { seenMessages?: SeenMessages } = await chrome.storage.local.get('seenMessages');
     const items = await identifyMessages(snapshot.url, snapshot.messages);
@@ -108,17 +111,24 @@ async function reschedule() {
   }
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.type === 'CHECK_TAB_ALLOWANCE' && sender.id === chrome.runtime.id && sender.tab?.id) {
+    void tabAllowance(sender.tab.id, message.token).then(allowance => respond({ allowed: !!allowance }));
+    return true;
+  }
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return;
   let task: Promise<unknown>;
   switch (message?.type) {
+    case 'GET_TAB_ACCESS': task = currentTab().then(async tab => ({ allowed: !!(await tabAllowance(tab.id!)) })); break;
+    case 'ALLOW_TAB': task = allowCurrentTab(message.tabId); break;
+    case 'REVOKE_TAB': task = currentTab().then(tab => revokeTab(tab.id!)); break;
     case 'EVALUATE': task = evaluate(); break;
-    case 'START': task = chrome.storage.local.set({ monitoring: true }).then(reschedule).then(evaluate); break;
+    case 'START': task = currentTab().then(tab => requireAllowed(tab.id!)).then(() => chrome.storage.local.set({ monitoring: true })).then(reschedule).then(evaluate); break;
     case 'STOP': task = chrome.storage.local.set({ monitoring: false }).then(reschedule); break;
     case 'MARK_ALL_READ': task = markAllRead(); break;
     case 'RESCHEDULE': task = reschedule(); break;
     default: return;
   }
-  task.then(() => respond({ ok: true })).catch(error => respond({ error: error instanceof Error ? error.message : 'Could not update monitoring.' }));
+  task.then(value => respond({ ok: true, value })).catch(error => respond({ error: error instanceof Error ? error.message : 'Could not update monitoring.' }));
   return true;
 });
 chrome.alarms.onAlarm.addListener(alarm => {

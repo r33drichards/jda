@@ -4,6 +4,8 @@ let fail = false;
 let failRules = false;
 let decisions: Record<string, string> = {};
 let ruleDelay = 0;
+let holdRules = false;
+const releaseRules: (() => void)[] = [];
 const requests: unknown[] = [];
 function answer(label: string, labels: string[]) {
   const other = labels.length === 2 ? 0.02 : 0.01;
@@ -35,10 +37,11 @@ createServer(async (req, res) => {
         const secret = 'secret-script';
       </script>`); return;
   }
+  if (req.url === '/release-rules') { releaseRules.splice(0).forEach(release => release()); res.end('ok'); return; }
   if (req.url === '/requests') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(requests)); return; }
   let body = ''; for await (const chunk of req) body += chunk;
   if (req.url === '/control') {
-    const value = JSON.parse(body); decisions = value.decisions ?? {}; ruleDelay = value.ruleDelay ?? 0;
+    const value = JSON.parse(body); decisions = value.decisions ?? {}; ruleDelay = value.ruleDelay ?? 0; holdRules = value.holdRules ?? false;
     decision = value.decision ?? 'update'; fail = value.fail ?? false; failRules = value.failRules ?? false; requests.length = 0;
     res.end('ok'); return;
   }
@@ -46,6 +49,7 @@ createServer(async (req, res) => {
     const payload = JSON.parse(body); requests.push(payload);
     res.setHeader('Content-Type', 'application/json');
     if (fail || (failRules && Object.keys(payload.questions)[0]?.startsWith('approve_'))) { res.writeHead(503).end('{"error":"test outage"}'); return; }
+    if (Object.keys(payload.questions)[0]?.startsWith('approve_') && holdRules) await new Promise<void>(resolve => releaseRules.push(resolve));
     if (Object.keys(payload.questions)[0]?.startsWith('approve_') && ruleDelay) await new Promise(resolve => setTimeout(resolve, ruleDelay));
     res.end(JSON.stringify({ model: 'jev-test', usage: { input_tokens: 10, output_tokens: 0 },
       answers: Object.fromEntries(Object.keys(payload.questions).map(key => {

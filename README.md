@@ -15,7 +15,7 @@ cp .env.example .env
 npm run server
 ```
 
-In another terminal run `npm run build`. In `chrome://extensions`, enable Developer mode and **Load unpacked** from `dist`. Open the target page and use jda's toolbar popup. The local server must remain running.
+In another terminal run `npm run build`. In `chrome://extensions`, enable Developer mode and **Load unpacked** from `dist`. Open the target page, open jda's toolbar popup, and click **Allow this tab** before evaluating or monitoring. The local server must remain running.
 
 ## Two stages
 
@@ -67,6 +67,14 @@ Both default selectors come from the supplied page HTML: the ProseMirror editor 
 
 Existing settings from the earlier categorization-rule format are accepted, but old rules default to `canApprove: false`; explicitly configure permission rules to authorize replies.
 
+## Allowed tabs only
+
+Every tab starts inactive. Use **Allow this tab** in the popup to enable the current HTTP(S) tab, or **Disallow this tab** to revoke it. Evaluating, starting monitoring, and Mark all as read require an allowance before any DOM capture or Jev call. A second tab on the same site is still inactive until separately allowed.
+
+Allowances are stored in trusted extension `chrome.storage.session`, scoped to the tab ID and exact site origin, and protected by a fresh token. They survive service-worker suspension and same-site reloads, but end when the tab closes, changes sites, is replaced, or Chrome restarts. A revoked token is checked before opening Reply and again immediately before Send, so pending work cannot submit after revocation. Already-started network requests may finish after revocation; no subsequent reply is permitted.
+
+Chrome's requested host permission applies to a site, but jda additionally enforces its own per-tab allowlist. Granting site permission does not activate other tabs. The periodic alarm evaluates only the active tab if it is explicitly allowed; it never scans all open tabs. Seen messages and approval receipts remain persistent across browser restarts, independently of temporary tab allowances.
+
 ## Seen messages and Mark all as read
 
 The popup's **Mark all as read** button marks every currently loaded `.message-text` item on the active page as seen, including items beyond the first processing batch. It makes no Jev call, clicks no Reply/Send button, and does not change the website's own read status. Messages not loaded in the DOM are unaffected.
@@ -77,7 +85,7 @@ Unchanged seen messages are excluded before calling the local service/Jev. An en
 
 ## Periodic monitoring and duplicates
 
-**Evaluate current page** runs the full pipeline once, including authorized replies. **Start monitoring** grants access to the current site and repeats the pipeline for the currently active tab in the last focused browser window. New sites need their own access grant. Settings and monitoring persist. The loop works with the popup closed. **Stop monitoring** cancels subsequent ticks; an in-flight evaluation may finish.
+**Evaluate current page** runs the full pipeline once, including authorized replies. **Start monitoring** repeats the pipeline only for an allowed active tab in the last focused browser window. Each tab must first be explicitly allowed. Settings and monitoring persist. The loop works with the popup closed. **Stop monitoring** cancels subsequent ticks; an in-flight evaluation may finish.
 
 The interval accepts 30–86400 seconds. Chrome alarms are approximate and may be delayed by sleep or browser suspension. They do not run with Chrome closed. Saving settings reschedules the interval. Requests do not overlap within a service worker.
 
@@ -87,7 +95,7 @@ Before attempting a reply, the extension stores a receipt keyed by page URL (wit
 
 The API key stays in the local Node service. The extension sends messages to `127.0.0.1:8787`, which calls TypeSafe. Message text may contain personal information. The service binds to loopback, rejects ordinary website origins and unexpected Host headers, and is intended for local personal use. Other local clients and extensions may access it. Do not expose it as a public endpoint.
 
-One-shot evaluation uses `activeTab`; monitoring requests persistent site access. Chrome-internal pages are unsupported. DOM actions are pinned to the exact captured document and message ID so navigation cannot redirect a reply into a different document.
+Allowing a tab requests site access for that origin; the additional tab gate is enforced for both one-shot evaluation and monitoring. Chrome-internal pages are unsupported. DOM actions are pinned to the exact captured document and message ID so navigation cannot redirect a reply into a different document.
 
 ## Tests
 

@@ -1,7 +1,12 @@
 import type { Message } from './shared';
 
 /** Self-contained, serialized into the exact document that was evaluated. */
-export async function replyApprove(message: Message, selectors: { editorSelector: string; sendSelector: string }) {
+export async function replyApprove(message: Message, selectors: { editorSelector: string; sendSelector: string }, allowanceToken: string) {
+  async function checkAllowance() {
+    const access = await chrome.runtime.sendMessage({ type: 'CHECK_TAB_ALLOWANCE', token: allowanceToken });
+    if (!access?.allowed) throw new Error('Tab allowance was revoked; no reply sent.');
+  }
+  await checkAllowance();
   if (!message.id) throw new Error('Automatic replies require a stable data-message-id.');
   if (!selectors.editorSelector || !selectors.sendSelector) throw new Error('Configure reply.editorSelector and reply.sendSelector in Settings.');
   const body = document.querySelector<HTMLElement>(`.message-body[data-message-id="${CSS.escape(message.id)}"]`);
@@ -42,6 +47,7 @@ export async function replyApprove(message: Message, selectors: { editorSelector
   if (body.querySelector<HTMLElement>('.message-text')?.innerText.trim() !== message.text) throw new Error('Message changed before send.');
   const replyText = editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement ? editor.value : editor.innerText;
   if (replyText.trim() !== 'approve') throw new Error('Reply draft changed before send.');
+  await checkAllowance();
   send.click();
   return 'sent' as const;
 }
