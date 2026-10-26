@@ -1,13 +1,11 @@
 import { z } from 'zod';
+import { messageSchema } from '../src/shared';
 import type { Snapshot } from '../src/shared';
 
-export const queryItemsSchema = z.array(z.record(z.string(), z.json())).max(30);
-export type QueryItem = z.infer<typeof queryItemsSchema>[number];
+export const queryItemsSchema = z.array(messageSchema).max(30);
+export type QueryItem = z.infer<typeof messageSchema>;
 
-/** Extract items from the captured DOM summary for batched Jev classification. */
+/** Messages captured in the browser using .message-text and .message-body. */
 export async function query(snapshot: Snapshot): Promise<QueryItem[]> {
-  // TODO: implement page-specific querying and return one JSON object per item.
-  // This no-op keeps page classification working until querying is implemented.
-  void snapshot;
-  return [];
+  return queryItemsSchema.parse(snapshot.messages ?? []);
 }

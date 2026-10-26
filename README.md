@@ -1,31 +1,48 @@
 # jda
 
-A hello-world Chrome extension that uses TypeSafe Jev to classify the current browser page as **update**, **asking for approval**, **clarifying question**, or **other**. Configure rules as JSON, evaluate once, or run on a periodic loop.
+A Chrome extension that extracts messages, categorizes them with TypeSafe Jev, and replies **approve** when an approval request matches any enabled permission rule.
 
-Based on the React/TypeScript/Vite + CRXJS architecture in [yosevu/react-chrome-extension-template](https://github.com/yosevu/react-chrome-extension-template) (source snapshot `1661acbdca3a626f5fb99be0908a3fedf2ba9dd9`). Uses the [official TypeSafe SDK](https://github.com/typesafe-ai/typesafe-sdk-js) and [Playwright's extension testing pattern](https://playwright.dev/docs/chrome-extensions).
+Based on [yosevu/react-chrome-extension-template](https://github.com/yosevu/react-chrome-extension-template), using React, TypeScript, Vite/CRXJS, the [official Jev SDK](https://github.com/typesafe-ai/typesafe-sdk-js), and Playwright integration tests.
 
-## Run locally
+## Run
 
-Requires Node 24+ and npm 11+.
+Requires Node 24+, npm 11+, and Chrome 120+.
 
 ```sh
 npm ci
 cp .env.example .env
-# Set TYPESAFE_API_KEY in .env to your actual TypeSafe API key.
+# Set TYPESAFE_API_KEY in .env.
 npm run server
 ```
 
-In a second terminal:
+In another terminal run `npm run build`. In `chrome://extensions`, enable Developer mode and **Load unpacked** from `dist`. Open the target page and use jda's toolbar popup. The local server must remain running.
 
-```sh
-npm run build
+## Two stages
+
+1. **Categorization:** all captured messages are classified in one Jev request as `update`, `asking for approval`, `clarifying question`, or `other`. Rules do not influence categorization.
+2. **Permission rules:** only `asking for approval` messages enter a second batched Jev request. Each enabled rule with `canApprove: true` is checked separately for each approval message. If **any** rule returns `can approve`, the extension clicks that message's Reply button, enters exactly `approve`, and clicks Send. No matching rule means no action. Every other category does nothing.
+
+These are model judgments. There is no confidence threshold. `canApprove: false` rules do not grant permission and are not veto rules. Default rules are empty, so no replies are authorized until you configure them.
+
+## DOM query
+
+The browser captures `.message-text` elements using:
+
+```ts
+{
+  index,
+  id: element.closest('.message-body')?.dataset.messageId ?? null,
+  text: element.innerText.trim()
+}
 ```
 
-Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select this project's `dist` directory. Open a regular HTTP(S) page and click the jda toolbar icon. Choose **Evaluate current page** to send a page summary to Jev. The local service must stay running.
+`server/query.ts` returns the captured messages. The query is implemented, replacing the earlier TODO. Each capture includes at most 30 messages, 4,000 characters per message, and 16,000 characters total. Stage one sends message objects to Jev. Stage two also supplies bounded page text and interactive element metadata as context for permission rules. Full HTML and form values are excluded. Frames and shadow roots are not queried.
 
-## Configure rules and monitoring
+For a permitted reply, the extension locates `.message-body[data-message-id="…"]`, finds `button[aria-label="Reply"]` inside it, scrolls and dispatches mouseover, then clicks Reply. Automatic replies require a stable message ID; index-only messages are classified but never replied to. The exact message text is checked against the captured text before opening Reply and again before Send. Truncated messages cannot pass the full-text check, so they are not automatically approved.
 
-Open **Settings** in the popup. The configuration contains:
+## Settings
+
+Use the popup's **Settings** button to edit JSON:
 
 ```json
 {
@@ -33,71 +50,55 @@ Open **Settings** in the popup. The configuration contains:
   "intervalSeconds": 60,
   "rules": [
     {
-      "id": "approval",
-      "description": "The main content asks someone to approve, authorize, or confirm a proposed action.",
-      "decision": "asking for approval",
-      "enabled": true
-    },
-    {
-      "id": "clarify",
-      "description": "The main content asks for missing information or clarification needed to proceed.",
-      "decision": "clarifying question",
-      "enabled": true
-    },
-    {
-      "id": "update",
-      "description": "The main content reports progress, status, or completed work without requesting a response.",
-      "decision": "update",
+      "id": "local-tests",
+      "description": "The requested action only runs local tests and does not modify files or external systems.",
+      "canApprove": true,
       "enabled": true
     }
-  ]
+  ],
+  "reply": {
+    "editorSelector": "div.ProseMirror[contenteditable=\"true\"][aria-label=\"Message\"]",
+    "sendSelector": "button[aria-label=\"Send\"]"
+  }
 }
 ```
 
-Rule decisions must be exactly `update`, `asking for approval`, `clarifying question`, or `other`. Put higher priority rules first; the model is instructed to favor the first applicable rule and choose `other` when evidence is insufficient. This is a model judgment, not deterministic rule matching. The popup shows its selected choice, confidence, and probabilities. With no enabled rules the service returns `other` without an API call.
+Both default selectors come from the supplied page HTML: the ProseMirror editor labeled Message and the button labeled Send. Change them in Settings if your page uses a different composer. Each selector must resolve to one visible element after Reply opens. Existing drafts are never overwritten, and disabled Send buttons are not clicked. Missing or ambiguous selectors produce a per-message error without sending.
 
-Click **Start monitoring** to grant persistent access to the current site and start Chrome alarms. Each tick captures the **currently active tab in the last focused browser window**, so changing tabs changes the evaluated page. Visiting another site requires granting access there too; otherwise capture fails visibly. **Stop monitoring** removes the alarm. Settings and monitoring state persist; browser startup recreates the alarm. The popup may be closed while monitoring runs.
+Existing settings from the earlier categorization-rule format are accepted, but old rules default to `canApprove: false`; explicitly configure permission rules to authorize replies.
 
-`intervalSeconds` accepts integers from 30 to 86400. Chrome alarms are approximate and may be delayed by sleep or browser suspension; they do not run while Chrome is closed. Saving settings restarts the interval. An in-flight request may finish after Stop; subsequent ticks are disabled. Requests never overlap within one service worker.
+## Periodic monitoring and duplicates
 
-## Data and credentials
+**Evaluate current page** runs the full pipeline once, including authorized replies. **Start monitoring** grants access to the current site and repeats the pipeline for the currently active tab in the last focused browser window. New sites need their own access grant. Settings and monitoring persist. The loop works with the popup closed. **Stop monitoring** cancels subsequent ticks; an in-flight evaluation may finish.
 
-The extension captures at most 16,000 characters of page text, 80 visible interactive element descriptions, the title, and the URL without query or fragment. It excludes scripts and form control values. It does not capture cross-origin frames or shadow roots. Page text can still contain sensitive information; this is a bounded summary, not a complete DOM or a privacy sanitizer.
+The interval accepts 30–86400 seconds. Chrome alarms are approximate and may be delayed by sleep or browser suspension. They do not run with Chrome closed. Saving settings reschedules the interval. Requests do not overlap within a service worker.
 
-Evaluation sends that summary and your rules to `127.0.0.1:8787`, which calls TypeSafe with `@typesafe-ai/sdk`. The API key stays in the Node process, outside the extension and browser storage. The bridge binds to loopback and rejects ordinary website origins and unexpected Host headers. It accepts extension origins and local non-browser clients; it is intended for local personal development. Do not expose it as a public service.
+Before attempting a reply, the extension stores a receipt keyed by page URL (without query/fragment) and message ID. Subsequent evaluations will not automatically retry that message, including after worker restart or an uncertain send failure. `sent` means the Send button was clicked; it does not independently confirm delivery. Inspect the page before manually retrying failed/uncertain attempts. Receipts are stored in `chrome.storage.local.approvalReceipts` and survive browser restarts; reinstalling or clearing extension data resets them.
 
-The initial extension host permission is loopback for its bridge. Other sites are requested individually when monitoring starts. One-shot evaluation uses `activeTab`. Restricted pages such as `chrome://` cannot be evaluated. Only the latest result is saved locally. Decisions are displayed; there is no browser action execution, approval enforcement, or automatic clicking.
+## Credentials and permissions
 
-## Query hook and batched decisions
+The API key stays in the local Node service. The extension sends messages to `127.0.0.1:8787`, which calls TypeSafe. Message text may contain personal information. The service binds to loopback, rejects ordinary website origins and unexpected Host headers, and is intended for local personal use. Other local clients and extensions may access it. Do not expose it as a public endpoint.
 
-`server/query.ts` exports `query(snapshot): Promise<QueryItem[]>`. It is intentionally unimplemented: its TODO currently returns an empty list. Implement it to extract up to 30 JSON objects from the captured page summary, for example messages or tasks. It receives the bounded snapshot, not a live browser `Document`.
+One-shot evaluation uses `activeTab`; monitoring requests persistent site access. Chrome-internal pages are unsupported. DOM actions are pinned to the exact captured document and message ID so navigation cannot redirect a reply into a different document.
 
-On each evaluation, the server calls the hook and passes its returned objects to `decide()` in `server/decide.ts`. One Jev request contains the page classification plus one Choice question per object (`query_0`, `query_1`, …), using the same four choices and configured rules. The state contains the page and the query objects. Results retain each object's list index in `queryResults`, and the popup displays the per-item decisions. An empty list preserves the existing page-only behavior. With no enabled rules, all results are `other` and no Jev call is made.
-
-## Integration tests
+## Tests
 
 ```sh
 npx playwright install chromium
 npm run check
-# Optional visible browser:
-npm run test:headed
 ```
 
-The tests load the **production-built extension** into an isolated Chromium profile. They run the real local bridge and official SDK against a deterministic fake TypeSafe endpoint. No real API key or paid API call is required.
+Tests load the production-built extension in isolated Chromium profiles, run the real Node bridge and official SDK against a deterministic fake TypeSafe API, and exercise a message/Reply/composer/Send fixture. No paid key is needed. Coverage includes categorization, two-stage routing, multiple permission rules, actual `approve` submission on the fixture, no action for other categories, no matching rules, disabled/non-permitting rules, duplicate suppression, changed messages, missing selectors, settings, upstream failure, and an actual 30-second alarm after closing the popup.
 
-Coverage includes all four choices, the outgoing Choice schema and DOM summary, omission of form values and URL parameters, persisted settings, rule disabling, invalid settings, upstream errors, the actual 30-second alarm after closing the popup and changing the DOM, stopping the alarm, and bridge validation/origin rejection. These verify wiring, not Jev's decision quality. Live model evaluations can be added separately.
+GitHub Actions runs the same checks on Ubuntu 24.04. Tests verify wiring and DOM actions, not live Jev accuracy or your site's actual editor integration. Use `npm run test:headed` for a visible browser.
 
-GitHub Actions runs lint, type checking, the production build, and the browser suite on pushes and pull requests, uploading traces and reports on failure. Add new scenarios in `tests/extension.spec.ts`; the fake upstream is `tests/mock-api.ts`.
+## Code
 
-## Structure
+- `src/snapshot.ts`: message and page capture.
+- `server/query.ts`: message query contract.
+- `server/decide.ts`: categorization and permission-rule batches.
+- `src/background.ts`: periodic loop and persistent reply receipts.
+- `src/reply.ts`: exact-message Reply/editor/Send adapter.
+- `src/shared.ts`: configuration and result validation.
 
-- `src/shared.ts`: validated rules, defaults, and typed request/results.
-- `src/snapshot.ts`: bounded page extraction.
-- `src/background.ts`: captures, API calls, and periodic Chrome alarms.
-- `src/App.tsx`: popup and monitoring controls.
-- `src/options.tsx`: persisted JSON configuration.
-- `server/index.ts`: local credential-owning bridge.
-- `server/query.ts`: unimplemented JSON query hook.
-- `server/decide.ts`: one batched Jev request for the page and query items.
-
-No Rust dependencies are used. If Rust is added, use Nix for dependency management and cargo commands, per `AGENTS.md`.
+If Rust is added, use Nix to manage dependencies and run cargo, per `AGENTS.md`.

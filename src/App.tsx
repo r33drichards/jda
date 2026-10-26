@@ -31,8 +31,8 @@ export default function App() {
   return <main className="popup">
     <header><span className="eyebrow">JEV · DOM · DECISION</span><button className="secondary" onClick={() => chrome.runtime.openOptionsPage()}>Settings</button></header>
     <h1>Hello world, jda.</h1>
-    <p>Your rules. This page. One decision.</p>
-    <p className="muted">Evaluation sends page text and an element summary through your local service to TypeSafe. Form values are excluded; page text may contain personal information.</p>
+    <p>Categorize messages and reply when your rules permit approval.</p>
+    <p className="muted">Evaluation sends captured message text through your local service to TypeSafe. Form values are excluded; page text may contain personal information.</p>
     <div className="controls"><button disabled={busy} onClick={() => run('EVALUATE')}>{busy ? 'Working…' : 'Evaluate current page'}</button>
     <button disabled={busy} className="secondary" onClick={() => run(monitoring ? 'STOP' : 'START')}>{monitoring ? 'Stop monitoring' : 'Start monitoring'}</button></div>
     <p data-testid="monitoring">Monitoring {monitoring ? 'on' : 'off'} · interval in Settings</p>
@@ -40,8 +40,8 @@ export default function App() {
     {latest?.result && <section aria-label="Decision result"><h2>{latest.result.decision}</h2>
       <p>Confidence: {latest.result.confidence === null ? 'unavailable' : `${Math.round(latest.result.confidence * 100)}%`}</p>
       <ul>{Object.entries(latest.result.probabilities ?? {}).map(([label, p]) => <li key={label}>{label}: {Math.round(p * 100)}%</li>)}</ul>
-      {latest.result.queryResults?.map(item => <p key={item.index}>Query item {item.index + 1}: {item.result.decision}</p>)}
+      {latest.result.queryResults?.map(item => <p key={item.index}>Message {item.id ?? item.index}: {item.result.decision} · {item.replyStatus ?? item.action}{item.replyError ? `: ${item.replyError}` : ''}</p>)}
       <p className="muted">{latest.url}<br />{new Date(latest.evaluatedAt).toLocaleTimeString()}</p></section>}
-    <p className="muted">The loop evaluates the active tab on sites you grant access to. Decisions are displayed only.</p>
+    <p className="muted">The loop evaluates the active tab on sites you grant access to. Matching approval rules automatically reply “approve”.</p>
   </main>;
 }

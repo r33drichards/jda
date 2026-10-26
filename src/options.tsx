@@ -16,7 +16,7 @@ export function OptionsApp() {
     } catch (error) { setStatus(`Invalid settings: ${error instanceof Error ? error.message : 'Unknown error'}`); }
   }
   return <main className="settings"><span className="eyebrow">JDA / CONFIGURATION</span><h1>Rules for this browser.</h1>
-    <p>Jev chooses “update”, “asking for approval”, “clarifying question”, or “other” from the page summary and your enabled rules. Put higher priority rules first. Set intervalSeconds to 30–86400 for periodic evaluation.</p>
+    <p>Stage one categorizes messages. Stage two evaluates only approval requests against enabled rules with canApprove: true. Any matching rule sends “approve”; other categories do nothing. Configure the reply editor and Send selectors below. Set intervalSeconds to 30–86400 for periodic evaluation.</p>
     <label htmlFor="config">Jev configuration (JSON)</label><textarea id="config" spellCheck={false} value={text} onChange={e => setText(e.target.value)} />
     <button onClick={save}>Save settings</button><p role="status">{status}</p>
     <p className="muted">API credentials belong in the local server’s .env file. Start it with npm run server.</p>

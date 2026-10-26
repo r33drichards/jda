@@ -4,7 +4,7 @@ import { requestSchema } from '../src/shared';
 import { query } from './query';
 import { decide } from './decide';
 
-const client = new TypeSafeClient({ timeout: 15000, retry: { maxRetries: 0 }, compression: false });
+const client = new TypeSafeClient({ timeout: 10000, retry: { maxRetries: 0 }, compression: false });
 const server = createServer(async (req, res) => {
   // Only extension-origin requests or local non-browser clients may reach Jev.
   const origin = req.headers.origin;
