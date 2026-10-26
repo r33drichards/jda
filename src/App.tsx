@@ -40,6 +40,7 @@ export default function App() {
     {latest?.result && <section aria-label="Decision result"><h2>{latest.result.decision}</h2>
       <p>Confidence: {latest.result.confidence === null ? 'unavailable' : `${Math.round(latest.result.confidence * 100)}%`}</p>
       <ul>{Object.entries(latest.result.probabilities ?? {}).map(([label, p]) => <li key={label}>{label}: {Math.round(p * 100)}%</li>)}</ul>
+      {latest.result.queryResults?.map(item => <p key={item.index}>Query item {item.index + 1}: {item.result.decision}</p>)}
       <p className="muted">{latest.url}<br />{new Date(latest.evaluatedAt).toLocaleTimeString()}</p></section>}
     <p className="muted">The loop evaluates the active tab on sites you grant access to. Decisions are displayed only.</p>
   </main>;

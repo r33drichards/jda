@@ -68,6 +68,12 @@ Evaluation sends that summary and your rules to `127.0.0.1:8787`, which calls Ty
 
 The initial extension host permission is loopback for its bridge. Other sites are requested individually when monitoring starts. One-shot evaluation uses `activeTab`. Restricted pages such as `chrome://` cannot be evaluated. Only the latest result is saved locally. Decisions are displayed; there is no browser action execution, approval enforcement, or automatic clicking.
 
+## Query hook and batched decisions
+
+`server/query.ts` exports `query(snapshot): Promise<QueryItem[]>`. It is intentionally unimplemented: its TODO currently returns an empty list. Implement it to extract up to 30 JSON objects from the captured page summary, for example messages or tasks. It receives the bounded snapshot, not a live browser `Document`.
+
+On each evaluation, the server calls the hook and passes its returned objects to `decide()` in `server/decide.ts`. One Jev request contains the page classification plus one Choice question per object (`query_0`, `query_1`, …), using the same four choices and configured rules. The state contains the page and the query objects. Results retain each object's list index in `queryResults`, and the popup displays the per-item decisions. An empty list preserves the existing page-only behavior. With no enabled rules, all results are `other` and no Jev call is made.
+
 ## Integration tests
 
 ```sh
@@ -90,6 +96,8 @@ GitHub Actions runs lint, type checking, the production build, and the browser s
 - `src/background.ts`: captures, API calls, and periodic Chrome alarms.
 - `src/App.tsx`: popup and monitoring controls.
 - `src/options.tsx`: persisted JSON configuration.
-- `server/index.ts`: local credential-owning bridge and Jev Choice request.
+- `server/index.ts`: local credential-owning bridge.
+- `server/query.ts`: unimplemented JSON query hook.
+- `server/decide.ts`: one batched Jev request for the page and query items.
 
 No Rust dependencies are used. If Rust is added, use Nix for dependency management and cargo commands, per `AGENTS.md`.

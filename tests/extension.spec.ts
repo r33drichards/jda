@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { defaultConfig } from '../src/shared';
+import type { QueryItem } from '../server/query';
 
 const base = 'http://127.0.0.1:8790';
 test.beforeEach(async ({ request }) => { await request.post(`${base}/control`, { data: {} }); });
@@ -85,4 +86,24 @@ test('no enabled rules returns other without calling Jev', async ({ request }) =
   expect(response.status()).toBe(200);
   expect(await response.json()).toEqual({ decision: 'other', confidence: null, probabilities: null });
   expect(await (await request.get(`${base}/requests`)).json()).toEqual([]);
+});
+test('query JSON items become separate questions in one Jev request', async ({ request }) => {
+  const { TypeSafeClient } = await import('@typesafe-ai/sdk');
+  const { decide } = await import('../server/decide');
+  const { query } = await import('../server/query');
+  const snapshot = { url: `${base}/fixture`, title: 'Messages', text: 'A page with messages', elements: [] };
+  expect(await query(snapshot)).toEqual([]); // Deliberately unimplemented hook.
+  const items: QueryItem[] = [{ id: 'message-1', text: 'Build finished', metadata: { complete: true } }, { id: 'message-2', text: 'Deployment finished' }];
+  const client = new TypeSafeClient({ apiKey: 'jda-fake-test-key', baseURL: base, compression: false, retry: { maxRetries: 0 } });
+  await request.post(`${base}/control`, { data: { decisions: { query_0: 'update', query_1: 'asking for approval' } } });
+  const result = await decide(client, defaultConfig, snapshot, items);
+  expect(result.queryResults?.map(item => ({ index: item.index, decision: item.result.decision }))).toEqual([
+    { index: 0, decision: 'update' }, { index: 1, decision: 'asking for approval' },
+  ]);
+  const calls = await (await request.get(`${base}/requests`)).json();
+  expect(calls).toHaveLength(1);
+  expect(calls[0].state).toEqual({ page: snapshot, queryItems: items });
+  expect(Object.keys(calls[0].questions)).toEqual(['classification', 'query_0', 'query_1']);
+  expect(calls[0].questions.query_0.instructions.task).toContain('queryItems[0]');
+  expect(calls[0].questions.query_1.instructions.task).toContain('queryItems[1]');
 });

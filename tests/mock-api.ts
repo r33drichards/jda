@@ -1,6 +1,15 @@
 import { createServer } from 'node:http';
 let decision = 'update';
 let fail = false;
+let decisions: Record<string, string> = {};
+function answer(label: string) {
+  return { type: 'choice', choice: label, confidence: 0.95, probabilities: {
+    update: label === 'update' ? 0.97 : 0.01,
+    'asking for approval': label === 'asking for approval' ? 0.97 : 0.01,
+    'clarifying question': label === 'clarifying question' ? 0.97 : 0.01,
+    other: label === 'other' ? 0.97 : 0.01,
+  } };
+}
 const requests: unknown[] = [];
 createServer(async (req, res) => {
   if (req.url === '/health') { res.end('ok'); return; }
@@ -13,21 +22,18 @@ createServer(async (req, res) => {
   for await (const chunk of req) body += chunk;
   if (req.url === '/control') {
     const value = JSON.parse(body);
+    decisions = value.decisions ?? {};
     decision = value.decision ?? 'update'; fail = value.fail ?? false; requests.length = 0;
     res.end('ok'); return;
   }
   if (req.url === '/v1/systemone') {
-    requests.push(JSON.parse(body));
+    const payload = JSON.parse(body);
+    requests.push(payload);
     res.setHeader('Content-Type', 'application/json');
     if (fail) { res.writeHead(503).end('{"error":"test outage"}'); return; }
-    res.end(JSON.stringify({ model: 'jev-test', usage: { input_tokens: 10, output_tokens: 0 }, answers: {
-      classification: { type: 'choice', choice: decision, confidence: 0.95, probabilities: {
-        'asking for approval': decision === 'asking for approval' ? 0.97 : 0.01,
-        'update': decision === 'update' ? 0.97 : 0.01,
-        'clarifying question': decision === 'clarifying question' ? 0.97 : 0.01,
-        other: decision === 'other' ? 0.97 : 0.01,
-      } },
-    } })); return;
+    res.end(JSON.stringify({ model: 'jev-test', usage: { input_tokens: 10, output_tokens: 0 },
+      answers: Object.fromEntries(Object.keys(payload.questions).map(key => [key, answer(decisions[key] ?? decision)])),
+    })); return;
   }
   res.writeHead(404).end();
 }).listen(8790, '127.0.0.1');

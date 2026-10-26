@@ -27,10 +27,13 @@ export const snapshotSchema = z.object({
 });
 export type Snapshot = z.infer<typeof snapshotSchema>;
 export const requestSchema = z.object({ config: configSchema, snapshot: snapshotSchema });
-export const resultSchema = z.object({
+export const classificationSchema = z.object({
   decision: decisionSchema,
   confidence: z.number().min(0).max(1).nullable(),
   probabilities: z.record(decisionSchema, z.number().min(0).max(1)).nullable(),
+});
+export const resultSchema = classificationSchema.extend({
+  queryResults: z.array(z.object({ index: z.number().int().nonnegative(), result: classificationSchema })).optional(),
 });
 export type Result = z.infer<typeof resultSchema>;
 export type Latest = { result?: Result; error?: string; url?: string; evaluatedAt: string };
