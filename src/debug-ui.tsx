@@ -46,7 +46,7 @@ export function Debugger() {
     </div>
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {run && <>
-      <p data-testid="debug-state">{run.finished ? 'Preview finished · no replies sent' : 'Paused between stages · monitoring off'} · target tab {run.tabId}</p>
+      <p data-testid="debug-state">{run.finished ? 'Preview finished · no replies sent' : run.steps.some(step => step.status === 'running') ? 'Evaluating preview · monitoring off' : 'Paused between stages · monitoring off'} · target tab {run.tabId}</p>
       {run.steps.map((step, i) => <section key={step.name} aria-label={step.name} className="debug-stage">
         <h2>{i + 1}. {step.name}</h2><p>{step.status}{step.elapsedMs === undefined ? '' : ` · ${step.elapsedMs} ms`}</p>
         {step.error && <p role="alert">{step.error}</p>}

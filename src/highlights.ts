@@ -19,7 +19,7 @@ export async function refreshHighlights(tabId: number, token?: string) {
   await requireAllowed(tabId, access.token);
   if (generations.get(tabId) !== generation) return;
   await chrome.scripting.executeScript({ target: { tabId, documentIds: [capture.documentId!] }, func: applyHighlights,
-    args: [items.map(({ key, message }) => ({ ...message, seen: !!seenMessages[key] })), access.token],
+    args: [items.map(({ key, message }) => ({ ...message, state: seenMessages[key]?.state === 'processing' ? 'processing' as const : seenMessages[key] ? 'read' as const : 'unread' as const })), access.token],
   });
 }
 export async function refreshAllowedHighlights() {

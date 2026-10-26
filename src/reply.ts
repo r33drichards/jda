@@ -10,6 +10,7 @@ export async function replyApprove(message: Message, selectors: { editorSelector
   if (!message.id) throw new Error('Automatic replies require a stable data-message-id.');
   if (!selectors.editorSelector || !selectors.sendSelector) throw new Error('Configure reply.editorSelector and reply.sendSelector in Settings.');
   const body = document.querySelector<HTMLElement>(`.message-body[data-message-id="${CSS.escape(message.id)}"]`);
+  if (body?.closest('.message-row.self,[data-message-author-role="user"]')) throw new Error('User messages are excluded from automatic replies.');
   const text = body?.querySelector<HTMLElement>('.message-text')?.innerText.trim();
   if (!body || text !== message.text) throw new Error('Message changed or disappeared; no reply sent.');
   body.scrollIntoView({ block: 'center' });

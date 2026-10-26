@@ -32,7 +32,7 @@ export default function App() {
     void chrome.alarms.get('jda-evaluate').then(alarm => setNextAt(alarm?.scheduledTime));
     return () => { clearInterval(timer); chrome.storage.onChanged.removeListener(listener); chrome.tabs.onActivated.removeListener(activated); };
   }, []);
-  async function run(type: 'EVALUATE' | 'START' | 'STOP' | 'MARK_ALL_READ' | 'ALLOW_TAB' | 'REVOKE_TAB' | 'POP_SEEN' | 'OPEN_DEBUG') {
+  async function run(type: 'EVALUATE' | 'START' | 'STOP' | 'MARK_ALL_READ' | 'ALLOW_TAB' | 'REVOKE_TAB' | 'POP_SEEN' | 'OPEN_DEBUG' | 'DRY_RUN') {
     setBusy(true); setError('');
     try {
       let requestedTabId: number | undefined;
@@ -66,9 +66,10 @@ export default function App() {
     <button disabled={busy || ((!allowed || !modelReady) && !monitoring)} className="secondary" onClick={() => run(monitoring ? 'STOP' : 'START')}>{monitoring ? 'Stop monitoring' : 'Start monitoring'}</button>
     <button disabled={busy || !allowed} className="secondary" onClick={() => run('MARK_ALL_READ')}>Mark all as read</button>
     <button disabled={busy || !allowed} className="secondary" onClick={() => run('POP_SEEN')}>Pop seen</button>
+    <button disabled={busy || !allowed || !modelReady} className="secondary" onClick={() => run('DRY_RUN')}>Dry run</button>
     <button disabled={busy || !allowed} className="secondary" onClick={() => run('OPEN_DEBUG')}>Open debugger</button></div>
     <label className="toggle"><input type="checkbox" checked={highlightEnabled} onChange={e => { const enabled = e.target.checked; setHighlightEnabled(enabled); void chrome.runtime.sendMessage({ type: 'SET_HIGHLIGHTS', enabled }).then(reply => { if (reply.error) setError(reply.error); }).catch(() => setError('Could not update highlights.')); }} /> Highlight read / unread messages</label>
-    <p className="muted">Unread: blue solid outline · Read: gray dashed outline</p>
+    <p className="muted">Unread: blue solid · Evaluating: amber double · Read: gray dashed</p>
 
     {latest?.notice && <p role="status">{latest.notice}</p>}
     {(error || latest?.error) && <p role="alert">{error || latest?.error}</p>}

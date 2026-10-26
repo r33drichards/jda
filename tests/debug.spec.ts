@@ -202,3 +202,54 @@ test('Eval now and Pop seen work between monitoring ticks without stopping the t
   await expect(popup.getByTestId('monitoring')).toContainText('Monitoring on');
   expect((await popup.evaluate(() => chrome.alarms.get('jda-evaluate')))!.scheduledTime).toBe(alarm!.scheduledTime);
 });
+
+test('messages being evaluated use amber highlights and return to unread after a model failure', async ({ context, extensionId, model }) => {
+  await model.configure({ decision: 'asking for approval', holdRules: true });
+  const { popup, page } = await setup(context, extensionId, { ...defaultConfig, rules });
+  await popup.getByRole('button', { name: 'Evaluate current page' }).click();
+  await expect.poll(async () => (await model.calls()).length).toBe(2);
+  await expect(page.locator('.message-body')).toHaveAttribute('data-jda-read', 'processing');
+  expect(await page.locator('.message-body').evaluate(el => getComputedStyle(el).outlineColor)).toBe('rgb(245, 185, 66)');
+  await model.releaseRules();
+  await expect(page.locator('.message-body')).toHaveAttribute('data-jda-read', 'read');
+  await popup.getByRole('button', { name: 'Pop seen', exact: true }).click();
+  await model.configure({ decision: 'asking for approval', holdRules: true, malformed: 'rule' });
+  await popup.getByRole('button', { name: 'Evaluate current page' }).click();
+  await expect.poll(async () => (await model.calls()).length).toBe(2);
+  await expect(page.locator('.message-body')).toHaveAttribute('data-jda-read', 'processing');
+  await model.releaseRules();
+  await expect(page.locator('.message-body')).toHaveAttribute('data-jda-read', 'unread');
+});
+
+test('Dry run runs all stages without sending or changing reads and pauses monitoring', async ({ context, extensionId, model }) => {
+  await model.configure({ decision: 'asking for approval', decisions: { '0:tests': 'can approve' } });
+  const { popup, page } = await setup(context, extensionId, { ...defaultConfig, rules });
+  const opened = context.waitForEvent('page');
+  await popup.getByRole('button', { name: 'Dry run', exact: true }).click();
+  const debug = await opened;
+  await expect(debug.getByTestId('debug-state')).toContainText('Preview finished · no replies sent');
+  expect(await model.calls()).toHaveLength(2);
+  await expect(debug.getByRole('region', { name: 'Preview replies', exact: true })).toContainText('approve');
+  await expect(page.locator('#sent p')).toHaveCount(0);
+  await expect(page.locator('[data-jda-read="unread"]')).toHaveCount(1);
+  const saved = await debug.evaluate(() => chrome.storage.local.get(['seenMessages', 'approvalReceipts', 'monitoring']));
+  expect(saved.seenMessages ?? {}).toEqual({}); expect(saved.approvalReceipts ?? {}).toEqual({}); expect(saved.monitoring).toBe(false);
+});
+test('user messages are excluded from queries, highlights and read controls while preserving DOM indices', async ({ context, extensionId, model }) => {
+  await model.configure({ decision: 'asking for approval' });
+  const { popup, page } = await setup(context, extensionId, { ...defaultConfig, rules }, true);
+  await page.locator('.message-body').first().evaluate(el => {
+    const row = document.createElement('article'); row.className = 'message-row self'; el.before(row); row.append(el);
+    el.querySelector('.message-text')!.textContent = 'USER ONLY SECRET';
+  });
+  await page.locator('.message-body').nth(1).evaluate(el => el.setAttribute('data-message-author-role', 'user'));
+  await evaluate(popup);
+  const calls = await model.calls();
+  expect(calls[0].input.messages?.map(m => m.index)).toEqual([2, 3]);
+  expect(JSON.stringify(calls)).not.toContain('USER ONLY SECRET');
+  await expect(page.locator('.message-row.self [data-jda-read]')).toHaveCount(0);
+  await expect(page.locator('[data-message-author-role="user"][data-jda-read]')).toHaveCount(0);
+  await popup.getByRole('button', { name: 'Mark all as read' }).click();
+  const { seenMessages } = await popup.evaluate(() => chrome.storage.local.get('seenMessages'));
+  expect(Object.keys(seenMessages)).toHaveLength(2);
+});

@@ -44,7 +44,7 @@ Local inference uses small batches (four messages or four rules) with JSON Schem
 
 The model does not return calibrated confidence/probabilities; jda leaves those fields null rather than inventing numbers. Model judgments can be wrong; integration tests verify the wiring and execution gates, not real-model accuracy.
 
-Stage one supplies only message objects to the model. Stage two also includes a bounded page summary: URL without query/fragment, title, up to 4,000 text characters, and 20 interactive-element descriptions. Page scripts, form values, and composer drafts are excluded by the capture logic. Page/message text can still contain personal information, but the extension does not send it to an external AI service. Frames and shadow roots are not queried.
+Stage one supplies only message objects to the model. Stage two also includes a bounded page summary: URL without query/fragment, title, up to 4,000 text characters, and 20 interactive-element descriptions. Page scripts, form values, and composer drafts are excluded by the capture logic. Page/message text can still contain personal information, but the extension does not send it to an external AI service. User-authored messages (`.message-row.self` on the Dot page, or `[data-message-author-role="user"]`) are excluded from message queries, page summaries, highlights, and read controls. Original DOM indices are preserved for other messages. Frames and shadow roots are not queried.
 
 ## Rules and reply selectors
 
@@ -92,6 +92,8 @@ Intervals are 30–86400 seconds. Chrome alarms are approximate, can be delayed 
 
 ## Debugger, highlights, and reruns
 
+**Dry run** in the popup runs all preview stages automatically and opens their results. It pauses monitoring, sends no replies, and leaves seen state and receipts unchanged. Restart monitoring explicitly afterward. Errors stop at the failing stage for inspection/retry.
+
 Use **Open debugger** from an allowed target tab, then **Start new debug run**. Starting a run pauses monitoring and clears the alarm. Advance with **Next** through:
 
 1. **Query DOM:** inspect captured message IDs, indexes, text, page summary, and selectors.
@@ -104,7 +106,7 @@ The debugger is a **dry run**: it never clicks Reply or Send, enters text, marks
 
 Each stage shows inputs, outputs, duration, and errors. Model traces contain prompts, JSON Schemas, raw responses, parsed JSON, and model errors. **Retry stage** reruns a failed stage against the captured snapshot. Only the latest run and latest 40 model calls are held in trusted extension session memory. The preview survives page reloads and worker suspension; browser/extension restart clears it. **Export trace JSON** saves a local copy with the tab allowance token omitted; traces can contain the target page's message text. **Clear trace** removes the session trace without changing persistent seen records or receipts.
 
-Read/unread highlights are enabled by default on allowed tabs: **unread = blue solid outline**, **read = gray dashed outline**. They add only styling/data attributes, preserve message text, update when messages are added or edited, and disappear when disabled or the tab is disallowed. Use the popup's highlight checkbox to toggle them.
+Read/unread highlights are enabled by default on allowed tabs: **unread = blue solid outline**, **evaluating = amber double outline**, **read = gray dashed outline**. They add only styling/data attributes, preserve message text, update when messages are added or edited, and disappear when disabled or the tab is disallowed. Use the popup's highlight checkbox to toggle them.
 
 **Pop seen** removes the most recently read, currently loaded message from the target page's seen list (DOM order breaks timestamp ties). It makes no model call and sends no reply. The next normal evaluation can classify that message again. In the debugger, start a new run after popping. Approval receipts are deliberately retained, so a previously sent or uncertain approval attempt is not automatically sent again. Pop refuses to run during an active evaluation. When idle, it can also release a reservation left by an interrupted worker so you can retry explicitly.
 

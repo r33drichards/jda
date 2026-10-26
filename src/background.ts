@@ -150,6 +150,16 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return;
   let task: Promise<unknown>;
   switch (message?.type) {
+    case 'DRY_RUN': task = debugExclusive(async () => {
+      const tab = await currentTab();
+      let run = await startDebug(tab.id!, false);
+      await chrome.tabs.create({ url: chrome.runtime.getURL(`debug.html?tab=${tab.id}`) });
+      while (!run.finished) {
+        run = await nextDebugStep();
+        if (run.steps.some(step => step.status === 'error')) break;
+      }
+      return run;
+    }); break;
     case 'OPEN_DEBUG': task = openDebug(); break;
     case 'DEBUG_START': task = debugExclusive(() => startDebug(message.tabId, !!message.includeSeen)); break;
     case 'DEBUG_NEXT': task = debugExclusive(nextDebugStep); break;
