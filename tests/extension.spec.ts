@@ -52,6 +52,8 @@ test('stage two only checks approvals; any permitting rule replies approve exact
   await evaluate(popup);
   await expect(page.locator('#sent p')).toHaveText(['approve']);
   await expect(page.locator('#sent p')).toHaveAttribute('data-message-id', 'message-2');
+  await expect(page.locator('body')).toHaveAttribute('data-closed-after-send', '1');
+  await expect(page.getByRole('button', { name: 'Close replies' })).toBeHidden();
   const calls = await model.calls();
   expect(calls).toHaveLength(2);
   expect(calls[0].input.messages).toHaveLength(4);

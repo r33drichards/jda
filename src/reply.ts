@@ -49,5 +49,16 @@ export async function replyApprove(message: Message, selectors: { editorSelector
   if (replyText.trim() !== 'approve') throw new Error('Reply draft changed before send.');
   await checkAllowance();
   send.click();
+  // Closing the reply panel is cleanup: never turn a sent approval into a retry.
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-label="Close replies"]'))
+      .filter(button => button.getClientRects().length > 0 && !button.disabled && button.getAttribute('aria-disabled') !== 'true');
+    if (buttons.length > 1) break;
+    if (buttons.length === 1) {
+      try { await checkAllowance(); buttons[0].click(); } catch { /* Approval was already sent. */ }
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
   return 'sent' as const;
 }
