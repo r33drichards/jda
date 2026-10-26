@@ -34,6 +34,8 @@ export const resultSchema = classificationSchema.extend({
   queryResults: z.array(z.object({
     index: z.number().int().nonnegative(), id: z.string().nullable(), text: z.string(), result: classificationSchema,
     action: z.enum(['approve', 'none']), matchedRules: z.array(z.string()),
+    reason: z.string().optional(),
+    ruleChecks: z.array(z.object({ ruleId: z.string(), matched: z.boolean() })).optional(),
     replyStatus: z.enum(['sent', 'already handled', 'failed']).optional(), replyError: z.string().optional(),
   })).optional(),
 });

@@ -86,9 +86,33 @@ The batch is reserved before inference to prevent repeats after worker interrupt
 
 ## Monitoring
 
-**Evaluate current page** runs once, including any permitted replies. **Start monitoring** repeats for the explicitly allowed active tab in the last focused browser window. It does not scan all tabs and works with the popup closed once the model is ready. **Stop monitoring** cancels future ticks; an in-flight inference may finish, and the tab gate still controls replies.
+**Evaluate current page** runs once, including any permitted replies. **Start monitoring** repeats for the explicitly allowed active tab in the last focused browser window. It does not scan all tabs and works with the popup closed once the model is ready. **Eval now** runs immediately while monitoring without changing the next scheduled tick. **Pop seen** remains available between evaluations while monitoring. **Stop monitoring** cancels future ticks; an in-flight inference may finish, and the tab gate still controls replies.
 
 Intervals are 30–86400 seconds. Chrome alarms are approximate, can be delayed by sleep, and do not run with Chrome closed. Settings, seen state, receipts, and the monitoring preference persist, but browser restart requires explicitly allowing tabs again. Overlapping evaluations are prevented within the worker.
+
+## Debugger, highlights, and reruns
+
+Use **Open debugger** from an allowed target tab, then **Start new debug run**. Starting a run pauses monitoring and clears the alarm. Advance with **Next** through:
+
+1. **Query DOM:** inspect captured message IDs, indexes, text, page summary, and selectors.
+2. **Filter seen:** inspect selected messages, seen records, and skipped counts. The **Include seen messages in this preview** option applies when starting a new run.
+3. **Categorize:** run the same categorization code used in normal evaluations.
+4. **Match approval rules:** inspect each rule's match/no-match result and the resulting action.
+5. **Preview replies:** inspect target existence, message freshness, Reply-button readiness, seen state, and existing approval receipts.
+
+The debugger is a **dry run**: it never clicks Reply or Send, enters text, marks messages seen, or creates approval receipts. The final stage shows what would happen. **Finish preview** ends a paused run early; monitoring remains stopped until you restart it. An unfinished preview blocks normal evaluation/monitoring so background work cannot race the steps. If the target document or allowance changes, start a new run.
+
+Each stage shows inputs, outputs, duration, and errors. Model traces contain prompts, JSON Schemas, raw responses, parsed JSON, and model errors. **Retry stage** reruns a failed stage against the captured snapshot. Only the latest run and latest 40 model calls are held in trusted extension session memory. The preview survives page reloads and worker suspension; browser/extension restart clears it. **Export trace JSON** saves a local copy with the tab allowance token omitted; traces can contain the target page's message text. **Clear trace** removes the session trace without changing persistent seen records or receipts.
+
+Read/unread highlights are enabled by default on allowed tabs: **unread = blue solid outline**, **read = gray dashed outline**. They add only styling/data attributes, preserve message text, update when messages are added or edited, and disappear when disabled or the tab is disallowed. Use the popup's highlight checkbox to toggle them.
+
+**Pop seen** removes the most recently read, currently loaded message from the target page's seen list (DOM order breaks timestamp ties). It makes no model call and sends no reply. The next normal evaluation can classify that message again. In the debugger, start a new run after popping. Approval receipts are deliberately retained, so a previously sent or uncertain approval attempt is not automatically sent again. Pop refuses to run during an active evaluation. When idle, it can also release a reservation left by an interrupted worker so you can retry explicitly.
+
+The popup countdown uses Chrome's actual scheduled alarm time and updates every second. It shows when the next evaluation check is due, when the timer is stopped, or when debugging has paused it. Chrome can delay an alarm during sleep or suspension, and a check still requires an allowed tab and an available model.
+
+### Why an approval message may not receive a reply
+
+The popup shows enabled approval-rule count, a message preview, a reason for each action, and individual rule-check results. **asking for approval · none** means categorization succeeded but no action was authorized: either no enabled `canApprove` rules are configured, or none matched. It does not mean a send was attempted. **failed** includes the actual reply error; **already handled** means a persistent receipt blocked a duplicate. Older cached results need a new evaluation to gain the detailed diagnostics.
 
 ## Tests
 
@@ -99,7 +123,7 @@ npm run check
 
 Tests load the built extension in disposable Chromium profiles and fake the native `LanguageModel` boundary in extension documents and the background worker. They do not download a model, require a key, or call an AI service. A development-only HTTP fixture serves a page with messages, Reply buttons, a ProseMirror-shaped contenteditable editor, and Send. This fixture server is used only by tests; jda has no runtime server.
 
-Coverage includes both decision stages, valid/invalid constrained results, context limits, model availability/download setup, no outbound AI requests, per-tab isolation/revocation, DOM replies, draft preservation, duplicate prevention, persistent seen filtering, Mark all as read, later batches, error retries, and the actual 30-second alarm with the popup closed. Actual Gemini Nano availability, latency, and decision quality must be checked on an eligible Chrome installation. GitHub Actions runs tests on Ubuntu 24.04.
+Coverage includes both decision stages, valid/invalid constrained results, context limits, model availability/download setup, no outbound AI requests, per-tab isolation/revocation, DOM replies, draft preservation, duplicate prevention, persistent seen filtering, Mark all as read, later batches, error retries, the actual 30-second alarm with the popup closed, dry-run stage stepping and trace export, read/unread highlights, Pop seen, detailed no-match diagnostics, and countdown timing. Actual Gemini Nano availability, latency, and decision quality must be checked on an eligible Chrome installation. GitHub Actions runs tests on Ubuntu 24.04.
 
 ## Code
 

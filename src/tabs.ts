@@ -1,3 +1,4 @@
+import { removeHighlights } from './highlight-dom';
 type TabAllowance = { origin: string; token: string };
 const keyFor = (id: number) => `allowedTab:${id}`;
 
@@ -35,6 +36,7 @@ export async function allowCurrentTab(expectedId: number) {
 
 export async function revokeTab(tabId: number) {
   await chrome.storage.session.remove(keyFor(tabId));
+  await chrome.scripting.executeScript({ target: { tabId }, func: removeHighlights }).catch(() => {});
 }
 
 chrome.tabs.onRemoved.addListener(id => { void revokeTab(id); });
