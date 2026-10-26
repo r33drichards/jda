@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 export const decisionSchema = z.enum(['update', 'asking for approval', 'clarifying question', 'other']);
 export const configSchema = z.object({
-  model: z.string().trim().min(1).max(100),
   intervalSeconds: z.number().int().min(30).max(86400),
   rules: z.array(z.object({
     id: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/).max(60),
@@ -15,7 +14,7 @@ export const configSchema = z.object({
 });
 export type Config = z.infer<typeof configSchema>;
 export const defaultConfig: Config = {
-  model: 'jev-latest', intervalSeconds: 60, rules: [],
+  intervalSeconds: 60, rules: [],
   reply: { editorSelector: 'div.ProseMirror[contenteditable="true"][aria-label="Message"]', sendSelector: 'button[aria-label="Send"]' },
 };
 export const messageSchema = z.object({ index: z.number().int().nonnegative(), id: z.string().max(500).nullable(), text: z.string().max(4000) });

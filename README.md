@@ -1,57 +1,62 @@
 # jda
 
-A Chrome extension that extracts messages, categorizes them with TypeSafe Jev, and replies **approve** when an approval request matches any enabled permission rule.
+A Chrome extension that runs **Gemini Nano on-device** to categorize messages and reply **approve** when an approval request matches one of your permission rules. No API key, local service, or hosted AI endpoint is required.
 
-Based on [yosevu/react-chrome-extension-template](https://github.com/yosevu/react-chrome-extension-template), using React, TypeScript, Vite/CRXJS, the [official Jev SDK](https://github.com/typesafe-ai/typesafe-sdk-js), and Playwright integration tests.
+Built with React, TypeScript, Vite/CRXJS, and Chrome's [Prompt API](https://developer.chrome.com/docs/ai/prompt-api). Originally based on [yosevu/react-chrome-extension-template](https://github.com/yosevu/react-chrome-extension-template).
 
-## Run
+## Install and prepare the model
 
-Requires Node 24+, npm 11+, and Chrome 120+.
+Requires desktop Google Chrome 138+ with a supported device. Plain Chromium may load the extension but generally lacks the Google-only components needed for Gemini Nano ([CEF status](https://github.com/chromiumembedded/cef/issues/3982)); unavailable builds perform no inference or approval. Chrome controls hardware eligibility, model availability, and the initial model download. An up-to-date browser alone does not guarantee the model is available.
 
 ```sh
 npm ci
-cp .env.example .env
-# Set TYPESAFE_API_KEY in .env.
-npm run server
+npm run build
 ```
 
-In another terminal run `npm run build`. In `chrome://extensions`, enable Developer mode and **Load unpacked** from `dist`. Open the target page, open jda's toolbar popup, and click **Allow this tab** before evaluating or monitoring. The local server must remain running.
+Open `chrome://extensions`, enable Developer mode, select **Load unpacked**, and choose `dist`. If jda is already loaded, reload it after building.
 
-## Two stages
+Open jda's popup or Settings. If the model is **downloadable** or **downloading**, click **Prepare model** and keep the page open until it says **available**. Chrome may download the model the first time; subsequent message inference runs on-device. **Unavailable** means this browser/device cannot run the API: jda will not process messages or approve anything, and there is no cloud fallback. Model preparation starts only from your button click, never from a timer.
 
-1. **Categorization:** all captured messages are classified in one Jev request as `update`, `asking for approval`, `clarifying question`, or `other`. Rules do not influence categorization.
-2. **Permission rules:** only `asking for approval` messages enter a second batched Jev request. Each enabled rule with `canApprove: true` is checked separately for each approval message. If **any** rule returns `can approve`, the extension clicks that message's Reply button, enters exactly `approve`, and clicks Send. No matching rule means no action. Every other category does nothing.
+The background worker feature-detects `LanguageModel` and checks availability before processing. It creates fresh sessions with English text inputs/outputs. No experimental flags or origin-trial permissions are configured.
 
-These are model judgments. There is no confidence threshold. `canApprove: false` rules do not grant permission and are not veto rules. Default rules are empty, so no replies are authorized until you configure them.
+## Allowed tabs
 
-## DOM query
+Every tab starts inactive. Open the target page, click jda, and choose **Allow this tab**. **Disallow this tab** remains available during inference and revokes pending reply permission. Other tabs on the same site require their own allowance.
 
-The browser captures `.message-text` elements using:
+Allowances live in trusted extension `chrome.storage.session`, scoped to the tab ID, exact origin, and a fresh token. They survive worker suspension and same-site reloads, but end when the tab closes, changes sites, is replaced, or the browser/extension restarts. Permission is checked before capturing the DOM, before each inference batch, before opening Reply, and immediately before Send. An in-progress model computation may finish after revocation; it cannot subsequently send a reply.
+
+Chrome grants host access per site, but jda enforces its own additional per-tab gate. The production manifest has **no default host permissions**. Site permission is requested when you explicitly allow a tab.
+
+## Query and two-stage decisions
+
+`src/snapshot.ts` enumerates `.message-text` elements and captures:
 
 ```ts
-{
-  index,
-  id: element.closest('.message-body')?.dataset.messageId ?? null,
-  text: element.innerText.trim()
-}
+{ index, id: element.closest('.message-body')?.dataset.messageId ?? null, text: element.innerText.trim() }
 ```
 
-`server/query.ts` returns the captured messages. The query is implemented, replacing the earlier TODO. The browser enumerates current messages locally, capturing at most 4,000 characters per message. After seen filtering, each Jev batch includes at most 30 unread messages and 16,000 message characters. Later ticks can process subsequent unread batches. Stage one sends message objects to Jev. Stage two also supplies bounded page text and interactive element metadata as context for permission rules. Full HTML and form values are excluded. Frames and shadow roots are not queried.
+At most 4,000 characters are captured per message. The seen filter forwards at most 30 unread messages and 16,000 message characters per evaluation. `src/query.ts` validates this list.
 
-For a permitted reply, the extension locates `.message-body[data-message-id="…"]`, finds `button[aria-label="Reply"]` inside it, scrolls and dispatches mouseover, then clicks Reply. Automatic replies require a stable message ID; index-only messages are classified but never replied to. The exact message text is checked against the captured text before opening Reply and again before Send. Truncated messages cannot pass the full-text check, so they are not automatically approved.
+1. **Categorization:** local model batches classify messages as `update`, `asking for approval`, `clarifying question`, or `other`. Permission rules are excluded from this stage.
+2. **Rules:** only approval-category messages are checked against enabled rules with `canApprove: true`. Each rule returns a boolean permission decision. If any rule explicitly permits the entire requested action, jda replies exactly `approve`. Missing/ambiguous evidence should return false. Other categories and unmatched approval requests do nothing.
 
-## Settings
+Local inference uses small batches (four messages or four rules) with JSON Schema response constraints. Runtime validation additionally requires every requested index/key exactly once, with no missing, duplicate, extra, or invalid answers. Any model error, malformed JSON, oversized context, or invalid result aborts the evaluation before any reply. No partial set of approvals is executed. Each prompt uses a fresh session, checks context capacity when supported, has a 60-second cancellation timeout, and destroys the session afterwards.
 
-Use the popup's **Settings** button to edit JSON:
+The model does not return calibrated confidence/probabilities; jda leaves those fields null rather than inventing numbers. Model judgments can be wrong; integration tests verify the wiring and execution gates, not real-model accuracy.
+
+Stage one supplies only message objects to the model. Stage two also includes a bounded page summary: URL without query/fragment, title, up to 4,000 text characters, and 20 interactive-element descriptions. Page scripts, form values, and composer drafts are excluded by the capture logic. Page/message text can still contain personal information, but the extension does not send it to an external AI service. Frames and shadow roots are not queried.
+
+## Rules and reply selectors
+
+Open **Settings** and edit the JSON. For example:
 
 ```json
 {
-  "model": "jev-latest",
   "intervalSeconds": 60,
   "rules": [
     {
       "id": "local-tests",
-      "description": "The requested action only runs local tests and does not modify files or external systems.",
+      "description": "The action only runs local tests without modifying files or external systems.",
       "canApprove": true,
       "enabled": true
     }
@@ -63,39 +68,27 @@ Use the popup's **Settings** button to edit JSON:
 }
 ```
 
-Both default selectors come from the supplied page HTML: the ProseMirror editor labeled Message and the button labeled Send. Change them in Settings if your page uses a different composer. Each selector must resolve to one visible element after Reply opens. Existing drafts are never overwritten, and disabled Send buttons are not clicked. Missing or ambiguous selectors produce a per-message error without sending.
+Default rules are empty, so no automatic reply is permitted until you configure a rule. Rules marked `canApprove: false` do not grant permission and are not veto rules.
 
-Existing settings from the earlier categorization-rule format are accepted, but old rules default to `canApprove: false`; explicitly configure permission rules to authorize replies.
+For a permitted reply, jda locates `.message-body[data-message-id="…"]`, finds its `button[aria-label="Reply"]`, scrolls/hovers/clicks it, and fills the configured editor. Selectors must each identify exactly one visible element. Inputs, textareas, and contenteditable editors are supported. Existing drafts are never overwritten. jda waits for Send to become enabled, verifies the exact message and `approve` draft again, checks the tab token, and clicks Send. A stable message ID is required; index-only and truncated messages cannot be replied to automatically. DOM actions target the exact document originally captured.
 
-## Allowed tabs only
+Legacy settings automatically discard the old `model` name while preserving interval, rules, and reply selectors. Old categorization rules without `canApprove` default to false.
 
-Every tab starts inactive. Use **Allow this tab** in the popup to enable the current HTTP(S) tab, or **Disallow this tab** to revoke it. Evaluating, starting monitoring, and Mark all as read require an allowance before any DOM capture or Jev call. A second tab on the same site is still inactive until separately allowed.
+## Seen list, read button, and receipts
 
-Allowances are stored in trusted extension `chrome.storage.session`, scoped to the tab ID and exact site origin, and protected by a fresh token. They survive service-worker suspension and same-site reloads, but end when the tab closes, changes sites, is replaced, or Chrome restarts. A revoked token is checked before opening Reply and again immediately before Send, so pending work cannot submit after revocation. Already-started network requests may finish after revocation; no subsequent reply is permitted.
+`chrome.storage.local.seenMessages` stores SHA-256 fingerprints of normalized page URL, message ID (or null), and captured text, plus processing states/timestamps. It survives reloads and browser restarts. Moving an unchanged message does not make it unread; edited content does. Changing rules does not reprocess old messages.
 
-Chrome's requested host permission applies to a site, but jda additionally enforces its own per-tab allowlist. Granting site permission does not activate other tabs. The periodic alarm evaluates only the active tab if it is explicitly allowed; it never scans all open tabs. Seen messages and approval receipts remain persistent across browser restarts, independently of temporary tab allowances.
+The batch is reserved before inference to prevent repeats after worker interruption, and marked processed only after both stages validate. Explicit model/validation failures release the reservation for a later retry. If the worker is interrupted mid-computation, its reserved batch remains seen. An entirely seen page makes no inference call.
 
-## Seen messages and Mark all as read
+**Mark all as read** marks every currently loaded message on the allowed active tab as seen, including those beyond one processing batch. It requires no model, performs no inference, sends no reply, and does not change the website's own read state. Unloaded messages are unaffected.
 
-The popup's **Mark all as read** button marks every currently loaded `.message-text` item on the active page as seen, including items beyond the first processing batch. It makes no Jev call, clicks no Reply/Send button, and does not change the website's own read status. Messages not loaded in the DOM are unaffected.
+`chrome.storage.local.approvalReceipts` separately records reply attempts by normalized page URL and stable message ID, before clicking. Even an edited message cannot receive a second automatic approval for the same ID. Interrupted or failed attempts are not retried automatically. `sent` means the Send button was clicked, not that delivery was independently confirmed. Inspect the page before retrying manually. Clearing extension data resets seen records and receipts.
 
-`chrome.storage.local.seenMessages` stores SHA-256 fingerprints of the normalized page URL, message ID (or null), and captured text, plus timestamps and processing states. Moving messages does not change their identity. An edit is new data and is eligible for classification again. Existing approval receipts still prevent a second automatic reply to the same message ID. Fingerprints persist through reloads, monitoring restarts, and browser restarts. Changing rules does not make old messages unread.
+## Monitoring
 
-Unchanged seen messages are excluded before calling the local service/Jev. An entirely seen page produces a “No unread messages to process” status and makes no request. The batch is reserved persistently before Jev and marked processed once categorization/rule checks succeed, even when no rule matches or a later reply fails. API or result-validation failures release the reservation so the next evaluation may retry. If the worker is interrupted mid-request, the reserved batch remains seen rather than risking repeated processing. Clearing extension data resets the seen list.
+**Evaluate current page** runs once, including any permitted replies. **Start monitoring** repeats for the explicitly allowed active tab in the last focused browser window. It does not scan all tabs and works with the popup closed once the model is ready. **Stop monitoring** cancels future ticks; an in-flight inference may finish, and the tab gate still controls replies.
 
-## Periodic monitoring and duplicates
-
-**Evaluate current page** runs the full pipeline once, including authorized replies. **Start monitoring** repeats the pipeline only for an allowed active tab in the last focused browser window. Each tab must first be explicitly allowed. Settings and monitoring persist. The loop works with the popup closed. **Stop monitoring** cancels subsequent ticks; an in-flight evaluation may finish.
-
-The interval accepts 30–86400 seconds. Chrome alarms are approximate and may be delayed by sleep or browser suspension. They do not run with Chrome closed. Saving settings reschedules the interval. Requests do not overlap within a service worker.
-
-Before attempting a reply, the extension stores a receipt keyed by page URL (without query/fragment) and message ID. Subsequent evaluations will not automatically retry that message, including after worker restart or an uncertain send failure. `sent` means the Send button was clicked; it does not independently confirm delivery. Inspect the page before manually retrying failed/uncertain attempts. Receipts are stored in `chrome.storage.local.approvalReceipts` and survive browser restarts; reinstalling or clearing extension data resets them.
-
-## Credentials and permissions
-
-The API key stays in the local Node service. The extension sends messages to `127.0.0.1:8787`, which calls TypeSafe. Message text may contain personal information. The service binds to loopback, rejects ordinary website origins and unexpected Host headers, and is intended for local personal use. Other local clients and extensions may access it. Do not expose it as a public endpoint.
-
-Allowing a tab requests site access for that origin; the additional tab gate is enforced for both one-shot evaluation and monitoring. Chrome-internal pages are unsupported. DOM actions are pinned to the exact captured document and message ID so navigation cannot redirect a reply into a different document.
+Intervals are 30–86400 seconds. Chrome alarms are approximate, can be delayed by sleep, and do not run with Chrome closed. Settings, seen state, receipts, and the monitoring preference persist, but browser restart requires explicitly allowing tabs again. Overlapping evaluations are prevented within the worker.
 
 ## Tests
 
@@ -104,18 +97,18 @@ npx playwright install chromium
 npm run check
 ```
 
-Tests load the production-built extension in isolated Chromium profiles, run the real Node bridge and official SDK against a deterministic fake TypeSafe API, and exercise a message/Reply/composer/Send fixture. No paid key is needed. Coverage includes categorization, two-stage routing, multiple permission rules, actual `approve` submission on the fixture, no action for other categories, no matching rules, disabled/non-permitting rules, duplicate suppression, changed messages, missing selectors, settings, upstream failure, an actual 30-second alarm after closing the popup, persisted seen filtering, edited/new messages, Mark all as read beyond one batch, subsequent unread batches, and API-failure retries.
+Tests load the built extension in disposable Chromium profiles and fake the native `LanguageModel` boundary in extension documents and the background worker. They do not download a model, require a key, or call an AI service. A development-only HTTP fixture serves a page with messages, Reply buttons, a ProseMirror-shaped contenteditable editor, and Send. This fixture server is used only by tests; jda has no runtime server.
 
-GitHub Actions runs the same checks on Ubuntu 24.04. Tests verify wiring and DOM actions, not live Jev accuracy or your site's actual editor integration. Use `npm run test:headed` for a visible browser.
+Coverage includes both decision stages, valid/invalid constrained results, context limits, model availability/download setup, no outbound AI requests, per-tab isolation/revocation, DOM replies, draft preservation, duplicate prevention, persistent seen filtering, Mark all as read, later batches, error retries, and the actual 30-second alarm with the popup closed. Actual Gemini Nano availability, latency, and decision quality must be checked on an eligible Chrome installation. GitHub Actions runs tests on Ubuntu 24.04.
 
 ## Code
 
-- `src/snapshot.ts`: message and page capture.
-- `server/query.ts`: message query contract.
-- `server/decide.ts`: categorization and permission-rule batches.
-- `src/background.ts`: periodic loop, Mark all as read, and persistent reply receipts.
-- `src/seen.ts`: persisted message fingerprints and unread batch selection.
-- `src/reply.ts`: exact-message Reply/editor/Send adapter.
-- `src/shared.ts`: configuration and result validation.
+- `src/snapshot.ts` → `src/query.ts`: capture and validate message objects.
+- `src/model.ts`: native model availability, download setup, and constrained sessions.
+- `src/decide.ts`: local categorization and permission-rule stages.
+- `src/tabs.ts`: trusted per-tab allowances.
+- `src/seen.ts`: fingerprints and unread batch selection.
+- `src/background.ts`: monitoring, seen state, and reply receipts.
+- `src/reply.ts`: exact-message Reply/editor/Send automation.
 
-If Rust is added, use Nix to manage dependencies and run cargo, per `AGENTS.md`.
+No Rust dependencies are used. If Rust is added, use Nix for dependency management and cargo commands per `AGENTS.md`.

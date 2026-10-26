@@ -1,4 +1,4 @@
 - Use nix for managing Rust dependencies and running cargo if Rust is added.
 - Run npm run check before pushing changes.
-- Keep API keys out of the extension bundle. The Node service owns credentials.
-- Integration tests load the production extension and use a local fake TypeSafe API; they must not require a paid API key.
+- Use Chrome’s built-in LanguageModel API for inference. Never add API keys, external AI calls, or a runtime server.
+- Integration tests load the production extension and fake the native model boundary; they must not download a model or require an API key.

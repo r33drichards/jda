@@ -1,9 +1,11 @@
-import { loadConfig, resultSchema } from './shared';
+import { loadConfig } from './shared';
 import type { Latest } from './shared';
 import { captureSnapshot } from './snapshot';
 import { replyApprove } from './reply';
 import { identifyMessages, unreadBatch } from './seen';
 import type { SeenMessages } from './seen';
+import { decide } from './decide';
+import { requireModelReady } from './model';
 import { allowCurrentTab, currentTab, requireAllowed, revokeTab, tabAllowance } from './tabs';
 
 const ALARM = 'jda-evaluate';
@@ -17,6 +19,7 @@ async function evaluate() {
   try {
     const tab = await currentTab();
     const allowance = await requireAllowed(tab.id!);
+    await requireModelReady();
     const [capture] = await chrome.scripting.executeScript({ target: { tabId: tab.id! }, func: captureSnapshot });
     const snapshot = capture.result;
     const config = await loadConfig();
@@ -30,17 +33,11 @@ async function evaluate() {
     }
     claimedKeys = pending.map(item => item.key);
     for (const key of claimedKeys) seenMessages[key] = { state: 'processing', at: new Date().toISOString() };
-    // Reserve the batch before Jev so a worker restart cannot process it twice.
+    // Reserve the batch before model inference so a worker restart cannot process it twice.
     await chrome.storage.local.set({ seenMessages });
     snapshot.messages = pending.map(item => item.message);
     await requireAllowed(tab.id!, allowance.token);
-    const response = await fetch('http://127.0.0.1:8787/decide', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, snapshot }),
-      signal: AbortSignal.timeout(25000),
-    });
-    if (!response.ok) throw new Error(`Decision service returned ${response.status}. Check the local server and API key.`);
-    const result = resultSchema.parse(await response.json());
+    const result = await decide(config, snapshot, () => requireAllowed(tab.id!, allowance.token));
     for (const key of claimedKeys) seenMessages[key] = { state: 'processed', at: new Date().toISOString() };
     await chrome.storage.local.set({ seenMessages });
     classificationsSaved = true;
@@ -76,7 +73,7 @@ async function evaluate() {
     const latest: Latest = { result, url, evaluatedAt: new Date().toISOString() };
     await chrome.storage.local.set({ latest });
   } catch (error) {
-    // API/validation failures are retryable; completed or interrupted batches stay seen.
+    // Model/validation failures are retryable; completed or interrupted batches stay seen.
     if (claimedKeys.length && !classificationsSaved) {
       const { seenMessages = {} } = await chrome.storage.local.get('seenMessages');
       for (const key of claimedKeys) delete seenMessages[key];
@@ -122,7 +119,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     case 'ALLOW_TAB': task = allowCurrentTab(message.tabId); break;
     case 'REVOKE_TAB': task = currentTab().then(tab => revokeTab(tab.id!)); break;
     case 'EVALUATE': task = evaluate(); break;
-    case 'START': task = currentTab().then(tab => requireAllowed(tab.id!)).then(() => chrome.storage.local.set({ monitoring: true })).then(reschedule).then(evaluate); break;
+    case 'START': task = currentTab().then(tab => requireAllowed(tab.id!)).then(requireModelReady).then(() => chrome.storage.local.set({ monitoring: true })).then(reschedule).then(evaluate); break;
     case 'STOP': task = chrome.storage.local.set({ monitoring: false }).then(reschedule); break;
     case 'MARK_ALL_READ': task = markAllRead(); break;
     case 'RESCHEDULE': task = reschedule(); break;

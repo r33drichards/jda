@@ -13,13 +13,11 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "server": "tsx --env-file-if-exists=.env server/index.ts",
     "test": "npm run build && playwright test",
     "test:headed": "npm run build && playwright test --headed",
     "check": "npm run lint && npm run test"
   },
   "dependencies": {
-    "@typesafe-ai/sdk": "^0.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.6.7"

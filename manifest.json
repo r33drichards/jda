@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "jda",
-  "description": "Hello world: Jev decisions from your rules and the current page.",
+  "description": "Local Chrome AI: categorize messages and approve only when your rules allow.",
   "version": "0.1.0",
   "action": {
     "default_title": "jda \u2014 evaluate this page",
@@ -32,12 +32,9 @@
     "service_worker": "src/background.ts",
     "type": "module"
   },
-  "host_permissions": [
-    "http://127.0.0.1/*"
-  ],
   "optional_host_permissions": [
     "http://*/*",
     "https://*/*"
   ],
-  "minimum_chrome_version": "120"
+  "minimum_chrome_version": "138"
 }

@@ -6,9 +6,5 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: { trace: 'retain-on-failure' },
-  webServer: [
-    { command: 'npx tsx tests/mock-api.ts', url: 'http://127.0.0.1:8790/health', reuseExistingServer: false },
-    { command: 'npm run server', url: 'http://127.0.0.1:8787/health', reuseExistingServer: false,
-      env: { TYPESAFE_API_KEY: 'jda-fake-test-key', TYPESAFE_BASE_URL: 'http://127.0.0.1:8790' } },
-  ],
+  webServer: { command: 'npx tsx tests/page-server.ts', url: 'http://127.0.0.1:8790/health', reuseExistingServer: false },
 });
