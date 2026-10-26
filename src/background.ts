@@ -2,6 +2,8 @@ import { loadConfig, resultSchema } from './shared';
 import type { Latest } from './shared';
 import { captureSnapshot } from './snapshot';
 import { replyApprove } from './reply';
+import { identifyMessages, unreadBatch } from './seen';
+import type { SeenMessages } from './seen';
 
 const ALARM = 'jda-evaluate';
 let inFlight = false;
@@ -9,6 +11,8 @@ async function evaluate() {
   if (inFlight) return;
   inFlight = true;
   let url: string | undefined;
+  let claimedKeys: string[] = [];
+  let classificationsSaved = false;
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab?.id) throw new Error('Open a web page before evaluating.');
@@ -17,6 +21,17 @@ async function evaluate() {
     const config = await loadConfig();
     if (!snapshot) throw new Error('Could not read this page.');
     url = snapshot.url;
+    const { seenMessages = {} }: { seenMessages?: SeenMessages } = await chrome.storage.local.get('seenMessages');
+    const pending = unreadBatch(await identifyMessages(url, snapshot.messages), seenMessages);
+    if (!pending.length) {
+      await chrome.storage.local.set({ latest: { url, evaluatedAt: new Date().toISOString(), notice: 'No unread messages to process.' } });
+      return;
+    }
+    claimedKeys = pending.map(item => item.key);
+    for (const key of claimedKeys) seenMessages[key] = { state: 'processing', at: new Date().toISOString() };
+    // Reserve the batch before Jev so a worker restart cannot process it twice.
+    await chrome.storage.local.set({ seenMessages });
+    snapshot.messages = pending.map(item => item.message);
     const response = await fetch('http://127.0.0.1:8787/decide', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config, snapshot }),
@@ -24,6 +39,9 @@ async function evaluate() {
     });
     if (!response.ok) throw new Error(`Decision service returned ${response.status}. Check the local server and API key.`);
     const result = resultSchema.parse(await response.json());
+    for (const key of claimedKeys) seenMessages[key] = { state: 'processed', at: new Date().toISOString() };
+    await chrome.storage.local.set({ seenMessages });
+    classificationsSaved = true;
     const { approvalReceipts = {} } = await chrome.storage.local.get('approvalReceipts');
     for (const item of result.queryResults ?? []) {
       if (item.result.decision !== 'asking for approval' || item.action !== 'approve') continue;
@@ -55,8 +73,30 @@ async function evaluate() {
     const latest: Latest = { result, url, evaluatedAt: new Date().toISOString() };
     await chrome.storage.local.set({ latest });
   } catch (error) {
+    // API/validation failures are retryable; completed or interrupted batches stay seen.
+    if (claimedKeys.length && !classificationsSaved) {
+      const { seenMessages = {} } = await chrome.storage.local.get('seenMessages');
+      for (const key of claimedKeys) delete seenMessages[key];
+      await chrome.storage.local.set({ seenMessages });
+    }
     const latest: Latest = { error: error instanceof Error ? error.message : 'Evaluation failed.', url, evaluatedAt: new Date().toISOString() };
     await chrome.storage.local.set({ latest });
+  } finally { inFlight = false; }
+}
+async function markAllRead() {
+  if (inFlight) throw new Error('Wait for the current evaluation to finish.');
+  inFlight = true;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.id) throw new Error('Open a web page first.');
+    const [{ result: snapshot }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: captureSnapshot });
+    if (!snapshot) throw new Error('Could not read this page.');
+    const { seenMessages = {} }: { seenMessages?: SeenMessages } = await chrome.storage.local.get('seenMessages');
+    const items = await identifyMessages(snapshot.url, snapshot.messages);
+    for (const { key } of items) seenMessages[key] = { state: 'read', at: new Date().toISOString() };
+    await chrome.storage.local.set({ seenMessages, latest: {
+      url: snapshot.url, evaluatedAt: new Date().toISOString(), notice: `Marked ${new Set(items.map(item => item.key)).size} messages as read.`,
+    } });
   } finally { inFlight = false; }
 }
 async function reschedule() {
@@ -74,10 +114,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     case 'EVALUATE': task = evaluate(); break;
     case 'START': task = chrome.storage.local.set({ monitoring: true }).then(reschedule).then(evaluate); break;
     case 'STOP': task = chrome.storage.local.set({ monitoring: false }).then(reschedule); break;
+    case 'MARK_ALL_READ': task = markAllRead(); break;
     case 'RESCHEDULE': task = reschedule(); break;
     default: return;
   }
-  task.then(() => respond({ ok: true })).catch(() => respond({ error: 'Could not update monitoring.' }));
+  task.then(() => respond({ ok: true })).catch(error => respond({ error: error instanceof Error ? error.message : 'Could not update monitoring.' }));
   return true;
 });
 chrome.alarms.onAlarm.addListener(alarm => {

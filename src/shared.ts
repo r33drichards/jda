@@ -39,7 +39,7 @@ export const resultSchema = classificationSchema.extend({
   })).optional(),
 });
 export type Result = z.infer<typeof resultSchema>;
-export type Latest = { result?: Result; error?: string; url?: string; evaluatedAt: string };
+export type Latest = { result?: Result; error?: string; notice?: string; url?: string; evaluatedAt: string };
 export async function loadConfig(): Promise<Config> {
   const { config } = await chrome.storage.local.get('config');
   return configSchema.parse(config ?? defaultConfig);

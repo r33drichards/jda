@@ -13,7 +13,7 @@ export default function App() {
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
   }, []);
-  async function run(type: 'EVALUATE' | 'START' | 'STOP') {
+  async function run(type: 'EVALUATE' | 'START' | 'STOP' | 'MARK_ALL_READ') {
     setBusy(true); setError('');
     try {
       if (type === 'START') {
@@ -34,8 +34,10 @@ export default function App() {
     <p>Categorize messages and reply when your rules permit approval.</p>
     <p className="muted">Evaluation sends captured message text through your local service to TypeSafe. Form values are excluded; page text may contain personal information.</p>
     <div className="controls"><button disabled={busy} onClick={() => run('EVALUATE')}>{busy ? 'Working…' : 'Evaluate current page'}</button>
-    <button disabled={busy} className="secondary" onClick={() => run(monitoring ? 'STOP' : 'START')}>{monitoring ? 'Stop monitoring' : 'Start monitoring'}</button></div>
+    <button disabled={busy} className="secondary" onClick={() => run(monitoring ? 'STOP' : 'START')}>{monitoring ? 'Stop monitoring' : 'Start monitoring'}</button>
+    <button disabled={busy} className="secondary" onClick={() => run('MARK_ALL_READ')}>Mark all as read</button></div>
     <p data-testid="monitoring">Monitoring {monitoring ? 'on' : 'off'} · interval in Settings</p>
+    {latest?.notice && <p role="status">{latest.notice}</p>}
     {(error || latest?.error) && <p role="alert">{error || latest?.error}</p>}
     {latest?.result && <section aria-label="Decision result"><h2>{latest.result.decision}</h2>
       <p>Confidence: {latest.result.confidence === null ? 'unavailable' : `${Math.round(latest.result.confidence * 100)}%`}</p>

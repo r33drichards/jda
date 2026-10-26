@@ -4,11 +4,9 @@ export function captureSnapshot() {
   copy.querySelectorAll('script,style,noscript,template,input,textarea,select,[contenteditable],[hidden],[aria-hidden="true"]').forEach(el => el.remove());
   const url = new URL(location.href);
   url.search = ''; url.hash = '';
-  let remaining = 16000;
-  const messages = Array.from(document.querySelectorAll<HTMLElement>('.message-text')).slice(0, 30).map((el, index) => {
+  const messages = Array.from(document.querySelectorAll<HTMLElement>('.message-text')).map((el, index) => {
     const body = el.closest<HTMLElement>('.message-body');
-    const text = el.innerText.trim().slice(0, Math.min(4000, remaining));
-    remaining -= text.length;
+    const text = el.innerText.trim().slice(0, 4000);
     return { index, id: body?.dataset.messageId ?? null, text };
   });
   return {

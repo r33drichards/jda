@@ -58,7 +58,8 @@ test('stage two only checks approvals; any permitting rule replies approve exact
   expect(JSON.stringify(calls[1])).not.toMatch(/secret-(input|textarea|script|query|fragment)/);
   await evaluate(popup);
   await expect(page.locator('#sent p')).toHaveText(['approve']);
-  await expect(popup.getByRole('region', { name: 'Decision result' })).toContainText('already handled');
+  await expect(popup.getByRole('status')).toHaveText('No unread messages to process.');
+  expect(await (await request.get(`${base}/requests`)).json()).toHaveLength(2);
 });
 test('approval without a matching rule does nothing', async ({ context, extensionId, request }) => {
   await request.post(`${base}/control`, { data: { decision: 'asking for approval' } });
@@ -155,4 +156,53 @@ test('messages without a stable ID are never replied to by index', async ({ cont
   await expect(popup.getByRole('region', { name: 'Decision result' })).toContainText('stable data-message-id');
   await expect(page.locator('#composer')).toBeHidden();
   await expect(page.locator('#sent p')).toHaveCount(0);
+});
+
+test('seen messages persist across reloads; edits and new messages are processed', async ({ context, extensionId, request }) => {
+  const { popup, page } = await setup(context, extensionId);
+  await evaluate(popup);
+  await page.reload(); await popup.reload(); await page.bringToFront();
+  await evaluate(popup);
+  await expect(popup.getByRole('status')).toHaveText('No unread messages to process.');
+  expect(await (await request.get(`${base}/requests`)).json()).toHaveLength(1);
+  await page.locator('.message-text').evaluate(el => { el.textContent = 'Edited message'; });
+  await evaluate(popup);
+  const calls = await (await request.get(`${base}/requests`)).json();
+  expect(calls).toHaveLength(2); expect(calls[1].state.messages[0].text).toBe('Edited message');
+  await page.locator('.message-body').evaluate(el => { const next = el.cloneNode(true) as HTMLElement; next.dataset.messageId = 'new-message'; next.querySelector('.message-text')!.textContent = 'New message'; el.after(next); });
+  await evaluate(popup);
+  const updated = await (await request.get(`${base}/requests`)).json();
+  expect(updated).toHaveLength(3); expect(updated[2].state.messages).toEqual([{ index: 1, id: 'new-message', text: 'New message' }]);
+});
+test('Mark all as read skips every existing message, including beyond one batch', async ({ context, extensionId, request }) => {
+  const { popup, page } = await setup(context, extensionId, { ...defaultConfig, rules, reply });
+  await page.locator('.message-body').evaluate(el => { for (let i = 1; i < 35; i++) { const next = el.cloneNode(true) as HTMLElement; next.dataset.messageId = `extra-${i}`; el.after(next); } });
+  await popup.getByRole('button', { name: 'Mark all as read' }).click();
+  await expect(popup.getByRole('status')).toHaveText('Marked 35 messages as read.');
+  await evaluate(popup);
+  await expect(popup.getByRole('status')).toHaveText('No unread messages to process.');
+  expect(await (await request.get(`${base}/requests`)).json()).toEqual([]);
+  await expect(page.locator('#sent p')).toHaveCount(0);
+  await page.locator('.message-body').first().evaluate(el => { const next = el.cloneNode(true) as HTMLElement; next.dataset.messageId = 'after-mark-read'; el.after(next); });
+  await evaluate(popup);
+  const calls = await (await request.get(`${base}/requests`)).json();
+  expect(calls).toHaveLength(1); expect(calls[0].state.messages).toHaveLength(1);
+  expect(calls[0].state.messages[0].id).toBe('after-mark-read');
+});
+test('seen filtering allows later batches past the first 30 messages', async ({ context, extensionId, request }) => {
+  const { popup, page } = await setup(context, extensionId);
+  await page.locator('.message-body').evaluate(el => { for (let i = 1; i < 35; i++) { const next = el.cloneNode(true) as HTMLElement; next.dataset.messageId = `extra-${i}`; el.after(next); } });
+  await evaluate(popup); await evaluate(popup); await evaluate(popup);
+  const calls = await (await request.get(`${base}/requests`)).json();
+  expect(calls.map((call: { state: { messages: unknown[] } }) => call.state.messages.length)).toEqual([30, 5]);
+  expect(new Set(calls.flatMap((call: { state: { messages: { id: string }[] } }) => call.state.messages.map(m => m.id))).size).toBe(35);
+});
+test('failed Jev requests remain unread and can retry', async ({ context, extensionId, request }) => {
+  await request.post(`${base}/control`, { data: { fail: true } });
+  const { popup } = await setup(context, extensionId); await evaluate(popup);
+  await expect(popup.getByRole('alert')).toContainText('502');
+  await request.post(`${base}/control`, { data: {} });
+  await evaluate(popup);
+  await expect(popup.getByRole('heading', { name: 'update', exact: true })).toBeVisible();
+  expect(await (await request.get(`${base}/requests`)).json()).toHaveLength(1);
 });
