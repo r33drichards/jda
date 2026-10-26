@@ -1,0 +1,4 @@
+- Use nix for managing Rust dependencies and running cargo if Rust is added.
+- Run npm run check before pushing changes.
+- Keep API keys out of the extension bundle. The Node service owns credentials.
+- Integration tests load the production extension and use a local fake TypeSafe API; they must not require a paid API key.
